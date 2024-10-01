@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='agora-realtime-ai-api',
-    version='1.0.5',
+    version='1.0.6',
     author='agora.io',
     author_email='apps_stuff@agora.io',
     description='Agora\'s low latency, high performance Realtime API to work with Voice Conversational AI',
@@ -18,6 +18,6 @@ setup(
     python_requires='>=3.11',
     install_requires=[
         'pyee==12.0.0',
-        'agora-python-server-sdk==2.0.6'
+        'agora-python-server-sdk==2.0.5'
     ],  # List of dependencies (if any)
 )
