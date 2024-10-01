@@ -2,8 +2,12 @@
 __copyright__ = "Copyright (c) 2014-2024 Agora.io, Inc."
 
 import logging
-logger = logging.getLogger(__name__)
+
+from ..logger import setup_logger
 from .RtcTokenBuilder2 import RtcTokenBuilder
+
+# Set up the logger with color and timestamp support
+logger = setup_logger(name=__name__, log_level=logging.INFO)
 
 class RealtimekitTokenBuilder(RtcTokenBuilder):
     @staticmethod
