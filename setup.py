@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='agora-realtime-ai-api',
-    version='1.0.6',
+    version='1.0.7',
     author='agora.io',
     author_email='apps_stuff@agora.io',
     description='Agora\'s low latency, high performance Realtime API to work with Voice Conversational AI',
