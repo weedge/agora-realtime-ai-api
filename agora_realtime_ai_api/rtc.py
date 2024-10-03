@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import json
 import logging
+import math
 import os
 from typing import Any, AsyncIterator
 
@@ -140,6 +142,9 @@ class ChannelEventObserver(
         if reassembled_message is not None:
             logger.info(f"Reassembled message: {msg_id} {reassembled_message}")
 
+    def on_stream_message_error(self, agora_rtc_conn, user_id_str, stream_id, code, missed, cached):
+        logger.warn(f"Stream message error: {user_id_str} {stream_id} {code} {missed} {cached}")
+
     def on_audio_subscribe_state_changed(
         self,
         agora_local_user,
@@ -189,6 +194,7 @@ class ChannelEventObserver(
 class Channel:
     def __init__(self, rtc: "RtcEngine", options: RtcOptions) -> None:
         self.loop = asyncio.get_event_loop()
+        self.stream_message_queue = asyncio.Queue()
 
         # Create the event emitter
         self.emitter = AsyncIOEventEmitter(self.loop)
@@ -275,6 +281,16 @@ class Channel:
                 self, "connection_state", conn_info.state
             ),
         )
+        
+        
+        def log_exception(t: asyncio.Task[Any]) -> None:
+            if not t.cancelled() and t.exception():
+                logger.error(
+                    "unhandled exception",
+                    exc_info=t.exception(),
+                )
+
+        asyncio.create_task(self._process_stream_message()).add_done_callback(log_exception)
 
     async def connect(self) -> None:
         """
@@ -363,7 +379,7 @@ class Channel:
         )
 
         ret = self.audio_pcm_data_sender.send_audio_pcm_data(audio_frame)
-        logger.info(f"Pushed audio frame: {ret}, audio frame length: {len(frame)}")
+        logger.debug(f"Pushed audio frame: {ret}, audio frame length: {len(frame)}")
         if ret < 0:
             raise Exception(f"Failed to send audio frame: {ret}, audio frame length: {len(frame)}")
 
@@ -449,37 +465,21 @@ class Channel:
         finally:
             self.off("audio_subscribe_state_changed", callback)
 
-    def _split_string_into_chunks(
-        self, long_string, msg_id, chunk_size=300
-    ) -> list[dict[str:Any]]:
+    async def _process_stream_message(self) -> None:
         """
-        Splits a long string into chunks of a given size.
-
-        Parameters:
-            long_string: The string to split.
-            msg_id: The message ID.
-            chunk_size: The size of each chunk.
-
-        Returns:
-            list[dict[str: Any]]: The list of chunks.
-
+        Processes stream messages.
         """
-        total_parts = (len(long_string) + chunk_size - 1) // chunk_size
-        json_chunks = []
-        for idx in range(total_parts):
-            start = idx * chunk_size
-            end = min(start + chunk_size, len(long_string))
-            chunk = {
-                "msg_id": msg_id,
-                "part_idx": idx,
-                "total_parts": total_parts,
-                "content": long_string[start:end],
-            }
-            json_chunk = json.dumps(chunk, ensure_ascii=False)
-            json_chunks.append(json_chunk)
-        return json_chunks
+        while True:
+            item = await self.stream_message_queue.get()
+            ret = self.connection.send_stream_message(self.stream_id, item)
+            if ret < 0:
+                logger.error(f"Failed to send stream message: {ret}")
+            self.stream_message_queue.task_done()
+            # wait to avoid too frequent message sending
+            await asyncio.sleep(0.04)
+            
 
-    async def send_stream_message(self, data: str, msg_id: str) -> None:
+    async def send_stream_message(self, data: str) -> None:
         """
         Sends a stream message to the channel.
 
@@ -487,10 +487,7 @@ class Channel:
             data: The data to send.
             msg_id: The message ID.
         """
-
-        chunks = self._split_string_into_chunks(data, msg_id)
-        for chunk in chunks:
-            self.connection.send_stream_message(self.stream_id, chunk)
+        await self.stream_message_queue.put(data)
 
     def on(self, event_name: str, callback):
         """
@@ -530,6 +527,10 @@ class ChatMessage:
         self.msg_id = msg_id
 
 
+
+# Constants
+MAX_CHUNK_SIZE_BYTES = 1024  # 1KB limit for the entire chunk after UTF-8 conversion
+
 class Chat:
     def __init__(self, channel: Channel) -> None:
         self.channel = channel
@@ -555,6 +556,64 @@ class Chat:
         await self.queue.put(item)
         # await self.queue.put_nowait(item)
 
+    def _text_to_base64_chunks(self, text: str, msg_id: str) -> list:
+        # Ensure msg_id does not exceed 50 characters
+        if len(msg_id) > 32:
+            raise ValueError("msg_id cannot exceed 32 characters.")
+        
+        # Convert text to bytearray
+        byte_array = bytearray(text, 'utf-8')
+        
+        # Encode the bytearray into base64
+        base64_encoded = base64.b64encode(byte_array).decode('utf-8')
+        
+        # Initialize list to hold the final chunks
+        chunks = []
+        
+        # We'll split the base64 string dynamically based on the final byte size
+        part_index = 0
+        total_parts = None  # We'll calculate total parts once we know how many chunks we create
+
+        # Process the base64-encoded content in chunks
+        current_position = 0
+        total_length = len(base64_encoded)
+        
+        while current_position < total_length:
+            part_index += 1
+            
+            # Start guessing the chunk size by limiting the base64 content part
+            estimated_chunk_size = MAX_CHUNK_SIZE_BYTES  # We'll reduce this dynamically
+            content_chunk = ""
+            count = 0
+            while True:
+                # Create the content part of the chunk
+                content_chunk = base64_encoded[current_position:current_position + estimated_chunk_size]
+
+                # Format the chunk
+                formatted_chunk = f"{msg_id}|{part_index}|{total_parts if total_parts else '???'}|{content_chunk}"
+
+                # Check if the byte length of the formatted chunk exceeds the max allowed size
+                if len(bytearray(formatted_chunk, 'utf-8')) <= MAX_CHUNK_SIZE_BYTES:
+                    break
+                else:
+                    # Reduce the estimated chunk size if the formatted chunk is too large
+                    estimated_chunk_size -= 100  # Reduce content size gradually
+                    count += 1
+
+            logger.debug(f"chunk estimate guess: {count}")
+
+            # Add the current chunk to the list
+            chunks.append(formatted_chunk)
+            current_position += estimated_chunk_size  # Move to the next part of the content
+
+        # Now that we know the total number of parts, update the chunks with correct total_parts
+        total_parts = len(chunks)
+        updated_chunks = [
+            chunk.replace("???", str(total_parts)) for chunk in chunks
+        ]
+
+        return updated_chunks
+
     async def _process_message(self) -> None:
         """
         Processes messages in the queue.
@@ -562,9 +621,10 @@ class Chat:
 
         while True:
             item: ChatMessage = await self.queue.get()
-            await self.channel.send_stream_message(item.message, item.msg_id)
+            chunks = self._text_to_base64_chunks(item.message, item.msg_id)
+            for chunk in chunks:
+                await self.channel.send_stream_message(chunk)
             self.queue.task_done()
-            # await asyncio.sleep(0)
 
 
 class RtcEngine:
