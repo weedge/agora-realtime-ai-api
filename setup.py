@@ -18,6 +18,6 @@ setup(
     python_requires='>=3.11',
     install_requires=[
         'pyee==12.0.0',
-        'agora-python-server-sdk==2.0.5'
+        'agora-python-server-sdk==2.0.8'
     ],  # List of dependencies (if any)
 )
