@@ -241,11 +241,17 @@ class Channel:
             "user_joined",
             lambda agora_rtc_conn, user_id: self.remote_users.update({user_id: True}),
         )
+        
+        def handle_user_left(agora_rtc_conn, user_id, reason):
+            if user_id in self.remote_users:
+                self.remote_users.pop(user_id, None)
+            if user_id in self.channel_event_observer.audio_streams:
+                audio_stream = self.channel_event_observer.audio_streams.pop(user_id, None)
+                audio_stream.queue.put_nowait(None)
+        
         self.on(
             "user_left",
-            lambda agora_rtc_conn, user_id, reason: self.remote_users.pop(
-                user_id, None
-            ),
+            handle_user_left,
         )
 
         def handle_audio_subscribe_state_changed(
@@ -261,8 +267,6 @@ class Channel:
                     self.channel_event_observer.audio_streams.update(
                         {user_id: AudioStream()}
                     )
-            elif new_state == 0:
-                self.channel_event_observer.audio_streams.pop(user_id, None)
 
         self.on("audio_subscribe_state_changed", handle_audio_subscribe_state_changed)
         self.on(
@@ -332,14 +336,14 @@ class Channel:
         self.connection.disconnect()
         await disconnected_future
 
-    def get_audio_frames(self, uid: int) -> AudioStream:
+    def get_audio_frames(self, uid: int) -> AudioStream | None:
         """
         Returns the audio frames from the channel.
 
         Returns:
             AudioStream: The audio stream.
         """
-        return self.channel_event_observer.audio_streams[uid]
+        return None if self.channel_event_observer.audio_streams.get(uid) is None else self.channel_event_observer.audio_streams.get(uid)
 
     async def push_audio_frame(self, frame: bytes) -> None:
         """
