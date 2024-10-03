@@ -192,7 +192,6 @@ class Channel:
 
         # Create the event emitter
         self.emitter = AsyncIOEventEmitter(self.loop)
-
         self.connection_state = 0
         self.options = options
         self.remote_users = dict[int, Any]()
@@ -258,9 +257,10 @@ class Channel:
             elapse_since_last_state,
         ):
             if new_state == 3:  # Successfully subscribed
-                self.channel_event_observer.audio_streams.update(
-                    {user_id: AudioStream()}
-                )
+                if user_id not in self.channel_event_observer.audio_streams:
+                    self.channel_event_observer.audio_streams.update(
+                        {user_id: AudioStream()}
+                    )
             elif new_state == 0:
                 self.channel_event_observer.audio_streams.pop(user_id, None)
 
