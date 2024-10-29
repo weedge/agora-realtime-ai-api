@@ -111,36 +111,11 @@ class ChannelEventObserver(
         logger.info(f"User left: {agora_rtc_conn} {user_id} {reason}")
         self.emit_event("user_left", agora_rtc_conn, user_id, reason)
 
-    def handle_received_chunk(self, json_chunk):
-        chunk = json.loads(json_chunk)
-        msg_id = chunk["msg_id"]
-        part_idx = chunk["part_idx"]
-        total_parts = chunk["total_parts"]
-        if msg_id not in self.received_chunks:
-            self.received_chunks[msg_id] = {"parts": {}, "total_parts": total_parts}
-        if (
-            part_idx not in self.received_chunks[msg_id]["parts"]
-            and 0 <= part_idx < total_parts
-        ):
-            self.received_chunks[msg_id]["parts"][part_idx] = chunk
-            if len(self.received_chunks[msg_id]["parts"]) == total_parts:
-                # all parts received, now recomposing original message and get rid it from dict
-                sorted_parts = sorted(
-                    self.received_chunks[msg_id]["parts"].values(),
-                    key=lambda c: c["part_idx"],
-                )
-                full_message = "".join(part["content"] for part in sorted_parts)
-                del self.received_chunks[msg_id]
-                return full_message, msg_id
-        return (None, None)
-
     def on_stream_message(
         self, agora_local_user: LocalUser, user_id, stream_id, data, length
     ):
         # logger.info(f"Stream message", agora_local_user, user_id, stream_id, length)
-        (reassembled_message, msg_id) = self.handle_received_chunk(data)
-        if reassembled_message is not None:
-            logger.info(f"Reassembled message: {msg_id} {reassembled_message}")
+        self.emit_event("stream_message", agora_local_user, user_id, stream_id, data, length)
 
     def on_stream_message_error(self, agora_rtc_conn, user_id_str, stream_id, code, missed, cached):
         logger.warn(f"Stream message error: {user_id_str} {stream_id} {code} {missed} {cached}")
