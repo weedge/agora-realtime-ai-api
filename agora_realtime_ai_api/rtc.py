@@ -74,7 +74,7 @@ class ChannelEventObserver(
     def __init__(self, event_emitter: AsyncIOEventEmitter, options: RtcOptions) -> None:
         self.loop = asyncio.get_event_loop()
         self.emitter = event_emitter
-        self.audio_streams = dict[int, AudioStream]()
+        self.audio_streams = dict[str, AudioStream]()
         self.options = options
 
     def emit_event(self, event_name: str, *args):
@@ -175,7 +175,7 @@ class Channel:
         self.emitter = AsyncIOEventEmitter(self.loop)
         self.connection_state = 0
         self.options = options
-        self.remote_users = dict[int, Any]()
+        self.remote_users = dict[str, Any]()
         self.rtc = rtc
         self.chat = Chat(self)
         self.channelId = options.channel_name
@@ -222,14 +222,14 @@ class Channel:
             "user_joined",
             lambda agora_rtc_conn, user_id: self.remote_users.update({user_id: True}),
         )
-        
+
         def handle_user_left(agora_rtc_conn, user_id, reason):
             if user_id in self.remote_users:
                 self.remote_users.pop(user_id, None)
             if user_id in self.channel_event_observer.audio_streams:
                 audio_stream = self.channel_event_observer.audio_streams.pop(user_id, None)
                 audio_stream.queue.put_nowait(None)
-        
+
         self.on(
             "user_left",
             handle_user_left,
@@ -256,8 +256,7 @@ class Channel:
                 self, "connection_state", conn_info.state
             ),
         )
-        
-        
+
         def log_exception(t: asyncio.Task[Any]) -> None:
             if not t.cancelled() and t.exception():
                 logger.error(
@@ -289,11 +288,12 @@ class Channel:
                 future.set_result(None)
             elif conn_info.state == 5:  # Connection failed
                 future.set_exception(
-                    Exception(f"Connection failed with state: {conn_info.state}")
+                    Exception(f"Connection failed with state: {conn_info.state} reason:{reason}")
                 )
 
         self.on("connection_state_changed", callback)
-        logger.info(f"Connecting to channel {self.channelId} with token {self.token}")
+        logger.info(
+            f"Connecting to channel {self.channelId} with token {self.token} uid {self.uid}")
         self.connection.connect(self.token, self.channelId, f"{self.uid}")
 
         if self.enable_pcm_dump:
@@ -327,14 +327,15 @@ class Channel:
         self.connection.disconnect()
         await disconnected_future
 
-    def get_audio_frames(self, uid: int) -> AudioStream | None:
+    def get_audio_frames(self, uid: str) -> AudioStream | None:
         """
         Returns the audio frames from the channel.
 
         Returns:
             AudioStream: The audio stream.
         """
-        return None if self.channel_event_observer.audio_streams.get(uid) is None else self.channel_event_observer.audio_streams.get(uid)
+        return None if self.channel_event_observer.audio_streams.get(uid) is None \
+            else self.channel_event_observer.audio_streams.get(uid)
 
     async def push_audio_frame(self, frame: bytes) -> None:
         """
@@ -364,7 +365,7 @@ class Channel:
         """
         self.audio_track.clear_sender_buffer()
 
-    async def subscribe_audio(self, uid: int) -> None:
+    async def subscribe_audio(self, uid: str) -> None:
         """
         Subscribes to the audio of a user.
 
@@ -402,7 +403,7 @@ class Channel:
         finally:
             self.off("audio_subscribe_state_changed", callback)
 
-    async def unsubscribe_audio(self, uid: int) -> None:
+    async def unsubscribe_audio(self, uid: str) -> None:
         """
         Unsubscribes from the audio of a user.
 
@@ -452,7 +453,6 @@ class Channel:
             self.stream_message_queue.task_done()
             # wait to avoid too frequent message sending
             await asyncio.sleep(0.04)
-            
 
     async def send_stream_message(self, data: str) -> None:
         """
@@ -502,9 +502,9 @@ class ChatMessage:
         self.msg_id = msg_id
 
 
-
 # Constants
 MAX_CHUNK_SIZE_BYTES = 1024  # 1KB limit for the entire chunk after UTF-8 conversion
+
 
 class Chat:
     def __init__(self, channel: Channel) -> None:
@@ -535,16 +535,16 @@ class Chat:
         # Ensure msg_id does not exceed 50 characters
         if len(msg_id) > 32:
             raise ValueError("msg_id cannot exceed 32 characters.")
-        
+
         # Convert text to bytearray
         byte_array = bytearray(text, 'utf-8')
-        
+
         # Encode the bytearray into base64
         base64_encoded = base64.b64encode(byte_array).decode('utf-8')
-        
+
         # Initialize list to hold the final chunks
         chunks = []
-        
+
         # We'll split the base64 string dynamically based on the final byte size
         part_index = 0
         total_parts = None  # We'll calculate total parts once we know how many chunks we create
@@ -552,10 +552,10 @@ class Chat:
         # Process the base64-encoded content in chunks
         current_position = 0
         total_length = len(base64_encoded)
-        
+
         while current_position < total_length:
             part_index += 1
-            
+
             # Start guessing the chunk size by limiting the base64 content part
             estimated_chunk_size = MAX_CHUNK_SIZE_BYTES  # We'll reduce this dynamically
             content_chunk = ""
